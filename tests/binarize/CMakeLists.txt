@@ -1,5 +1,6 @@
 add_executable(binarize_tests
     binarize_tests.cpp
+    heatshrink_roundtrip_tests.cpp
     meatpack_overflow_tests.cpp
     metadata_iterator_tests.cpp
 )

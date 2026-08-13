@@ -238,9 +238,13 @@ static bool compress(std::vector<uint8_t>& src, std::vector<uint8_t>& dst, EComp
         if (encoder == nullptr)
             return false;
 
-        // calculate the maximum compressed size (assuming a conservative estimate)
+        // Heatshrink can expand: every literal costs a tag bit, so the worst case is
+        // about 9/8 of the input, plus whatever the final flush emits and the padding
+        // to a whole byte. A pure ratio is not enough because it rounds down to
+        // nothing for tiny inputs -- a 1-byte payload got a 1-byte buffer, which
+        // cannot hold even one tagged literal.
         const size_t src_size = src.size();
-        const size_t max_compressed_size = src_size + (src_size >> 2);
+        const size_t max_compressed_size = src_size + (src_size >> 2) + 64;
         dst.resize(max_compressed_size);
 
         uint8_t* buf = src.data();
@@ -249,6 +253,23 @@ static bool compress(std::vector<uint8_t>& src, std::vector<uint8_t>& dst, EComp
         // compress data
         size_t tosink = src_size;
         size_t output_size = 0;
+
+        // Drain until the encoder says it is empty, and treat a full output
+        // buffer as an error rather than silently truncating.
+        auto drain = [&]() {
+            HSE_poll_res poll_res;
+            do {
+                size_t polled = 0;
+                poll_res = heatshrink_encoder_poll(encoder, outbuf + output_size, max_compressed_size - output_size, &polled);
+                if (poll_res < 0)
+                    return false;
+                output_size += polled;
+                if (poll_res == HSER_POLL_MORE && output_size == max_compressed_size)
+                    return false;
+            } while (poll_res == HSER_POLL_MORE);
+            return true;
+        };
+
         while (tosink > 0) {
             size_t sunk = 0;
             const HSE_sink_res sink_res = heatshrink_encoder_sink(encoder, buf, tosink, &sunk);
@@ -263,13 +284,10 @@ static bool compress(std::vector<uint8_t>& src, std::vector<uint8_t>& dst, EComp
             tosink -= sunk;
             buf += sunk;
 
-            size_t polled = 0;
-            const HSE_poll_res poll_res = heatshrink_encoder_poll(encoder, outbuf + output_size, max_compressed_size - output_size, &polled);
-            if (poll_res < 0) {
+            if (!drain()) {
                 heatshrink_encoder_free(encoder);
                 return false;
             }
-            output_size += polled;
         }
 
         // input data finished
@@ -279,14 +297,13 @@ static bool compress(std::vector<uint8_t>& src, std::vector<uint8_t>& dst, EComp
             return false;
         }
 
-        // poll for final output
-        size_t polled = 0;
-        const HSE_poll_res poll_res = heatshrink_encoder_poll(encoder, outbuf + output_size, max_compressed_size - output_size, &polled);
-        if (poll_res < 0) {
+        // Poll for the final output; the flush is where more than one poll is
+        // most likely to be needed.
+        if (!drain()) {
             heatshrink_encoder_free(encoder);
             return false;
         }
-        dst.resize(output_size + polled);
+        dst.resize(output_size);
         heatshrink_encoder_free(encoder);
         break;
     }
