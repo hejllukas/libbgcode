@@ -46,6 +46,7 @@ enum class EResult : uint16_t
     MissingPrinterMetadata,
     MissingPrintMetadata,
     MissingSlicerMetadata,
+    BlockTooLarge,
 };
 
 enum class EChecksumType : uint16_t

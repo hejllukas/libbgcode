@@ -3,6 +3,7 @@
 #include <unordered_map>
 #include <algorithm>
 #include <cassert>
+#include <cstdlib>
 
 namespace MeatPack {
 
@@ -85,7 +86,7 @@ void MPBinarizer::finalize(std::vector<uint8_t>& dst)
     }
 }
 
-void MPBinarizer::binarize_line(const std::string& line, std::vector<uint8_t>& dst)
+bool MPBinarizer::binarize_line(const std::string& line, std::vector<uint8_t>& dst)
 {
     auto unified_method = [this](const std::string& line) {
         const std::string::size_type g_idx = line.find('G');
@@ -141,13 +142,17 @@ void MPBinarizer::binarize_line(const std::string& line, std::vector<uint8_t>& d
 
         if ((m_flags & Flag_RemoveComments) == 0) {
             if (!trimmed_line.empty() && trimmed_line[0] == ';') {
+                // Kept verbatim; a 0xFF here would collide with the decoder's signal byte.
+                if (line.find('\xff') != std::string::npos)
+                    return false;
+
                 if (m_binarizing) {
                     append_command(Command_DisablePacking, dst);
                     m_binarizing = false;
                 }
 
                 dst.insert(dst.end(), line.begin(), line.end());
-                return;
+                return true;
             }
         }
 
@@ -156,14 +161,17 @@ void MPBinarizer::binarize_line(const std::string& line, std::vector<uint8_t>& d
             trimmed_line[0] == '\n' ||
             trimmed_line[0] == '\r' ||
             line.size() < 2)
-            return;
+            return true;
 
         std::string modifiedLine = std::string(trim(std::string_view(line.substr(0, line.find(';')))));
         if (modifiedLine.empty())
-            return;
+            return true;
         modifiedLine = unified_method(modifiedLine);
         if (modifiedLine.back() != '\n')
             modifiedLine.push_back('\n');
+        // 0xFF is the decoder's signal byte; it cannot be represented in the packed output.
+        if (modifiedLine.find('\xff') != std::string::npos)
+            return false;
         const size_t line_len = modifiedLine.size();
         std::vector<uint8_t> temp_buffer;
         temp_buffer.reserve(line_len);
@@ -203,6 +211,8 @@ void MPBinarizer::binarize_line(const std::string& line, std::vector<uint8_t>& d
 
         dst.insert(dst.end(), temp_buffer.begin(), temp_buffer.end());
     }
+
+    return true;
 }
 
 void MPBinarizer::append_command(unsigned char cmd, std::vector<uint8_t>& dst) {
@@ -220,6 +230,11 @@ void MPBinarizer::initialize_lookup_tables() {
         s_lookup_tables.packable[index] = 1;
         s_lookup_tables.value[index] = value;
     }
+
+    // The '\0' entry only supplies the escape nibble (value 0b1111) used above; a
+    // real 0x00 data byte must stay non-packable so it takes the verbatim-escape
+    // path instead of being packed as that escape nibble.
+    s_lookup_tables.packable[static_cast<uint8_t>('\0')] = 0;
 
     if ((m_flags & Flag_OmitWhitespaces) != 0) {
         s_lookup_tables.value[static_cast<uint8_t>(SpaceReplacedCharacter)] = ReverseLookupTbl.at(' ');
@@ -244,7 +259,9 @@ void unbinarize(const std::vector<uint8_t>& src, std::string& dst)
     uint8_t char_buf = 0;                // Buffers a character if dealing with out-of-sequence pairs
     size_t cmd_count = 0;                // Counts how many command bytes are received (need 2)
     size_t full_char_queue = 0;          // Counts how many full-width characters are to be received
-    std::array<uint8_t, 2> char_out_buf; // Output buffer for caching up to 2 characters
+    // One loop iteration can call handle_rx_char twice, each emitting up to 2 characters.
+    constexpr size_t max_chars_per_iteration = 4;
+    std::array<uint8_t, max_chars_per_iteration> char_out_buf;
     size_t char_out_count = 0;           // Stores number of characters to be read out
 
     auto handle_command = [&](uint8_t c) {
@@ -261,6 +278,8 @@ void unbinarize(const std::vector<uint8_t>& src, std::string& dst)
     };
 
     auto handle_output_char = [&](uint8_t c) {
+        if (char_out_count >= char_out_buf.size())
+            std::abort(); // char_out_buf is sized for the worst case; getting here means that invariant broke
         char_out_buf[char_out_count++] = c;
     };
 
@@ -340,7 +359,7 @@ void unbinarize(const std::vector<uint8_t>& src, std::string& dst)
             handle_output_char(c);
     };
 
-    auto get_result_char = [&](std::array<char, 2>& chars_out) {
+    auto get_result_char = [&](std::array<char, max_chars_per_iteration>& chars_out) {
         if (char_out_count > 0) {
             const size_t res = char_out_count;
             for (uint8_t i = 0; i < char_out_count; ++i) {
@@ -400,7 +419,7 @@ void unbinarize(const std::vector<uint8_t>& src, std::string& dst)
             return std::find(parameters.begin(), parameters.end(), c) != parameters.end();
         };
 
-        std::array<char, 2> c_unbin{ 0, 0 };
+        std::array<char, max_chars_per_iteration> c_unbin{ 0, 0, 0, 0 };
         const size_t char_count = get_result_char(c_unbin);
         for (size_t i = 0; i < char_count; ++i) {
             // GCodeReader::parse_line_internal() is unable to parse a G line where the data are not separated by spaces

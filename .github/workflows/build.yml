@@ -14,6 +14,17 @@ jobs:
     # See: https://docs.github.com/en/free-pro-team@latest/actions/learn-github-actions/managing-complex-workflows#using-a-build-matrix
     runs-on: ubuntu-latest
 
+    strategy:
+      matrix:
+        include:
+          - sanitizer: "OFF"
+            label: linux
+          - sanitizer: "ON"
+            label: linux-asan
+
+    env:
+      ASAN_OPTIONS: detect_leaks=0
+
     steps:
     - uses: actions/checkout@v3
 
@@ -58,21 +69,23 @@ jobs:
         -DCMAKE_BUILD_TYPE=$BUILD_TYPE
         -DCMAKE_PREFIX_PATH=${{github.workspace}}/deps/build-python-module/destdir/usr/local
         -DCMAKE_INSTALL_PREFIX=${{github.workspace}}/build/dist
-        -DCATCH_EXTRA_ARGS="--reporter;junit;--out=result-junit-linux.xml"
-    
+        -DLibBGCode_BUILD_SANITIZERS=${{ matrix.sanitizer }}
+        -DCATCH_EXTRA_ARGS="--reporter;junit;--out=result-junit-${{ matrix.label }}.xml"
+
     - name: Build
       working-directory: ${{github.workspace}}/build
       shell: bash
       run: cmake --build . --config $BUILD_TYPE --target install
-      
+
     - name: Test
       working-directory: ${{github.workspace}}/build
       shell: bash
-      # Execute tests defined by the CMake configuration.  
+      # Execute tests defined by the CMake configuration.
       # See https://cmake.org/cmake/help/latest/manual/ctest.1.html for more detail
       run: ctest --verbose
 
     - name: Build example (using find_package)
+      if: matrix.sanitizer == 'OFF'
       working-directory: ${{github.workspace}}/example/build_fp
       shell: bash
       run: |
@@ -80,6 +93,7 @@ jobs:
         cmake --build .
 
     - name: Build example (using add_subdirectory)
+      if: matrix.sanitizer == 'OFF'
       working-directory: ${{github.workspace}}/example/build_subd
       shell: bash
       run: |
@@ -87,6 +101,7 @@ jobs:
         cmake --build .
 
     - name: Build Python wheel
+      if: matrix.sanitizer == 'OFF'
       working-directory: ${{github.workspace}}
       shell: bash
       run: python -m build --wheel
@@ -94,12 +109,12 @@ jobs:
     - uses: actions/upload-artifact@v4  # upload test results
       if: success() || failure()        # run this step even if previous step failed
       with:
-        name: test-results-linux
-        path: ${{github.workspace}}/build/**/result-junit-linux.xml
-    
+        name: test-results-${{ matrix.label }}
+        path: ${{github.workspace}}/build/**/result-junit-${{ matrix.label }}.xml
+
     - uses: actions/upload-artifact@v4  # upload python module
       name: Saving Python artifacts
-      if: success()
+      if: success() && matrix.sanitizer == 'OFF'
       with:
         name: libbgcode-python-linux
         path: ${{github.workspace}}/dist/

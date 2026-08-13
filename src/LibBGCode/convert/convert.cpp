@@ -448,6 +448,12 @@ BGCODE_CONVERT_EXPORT EResult from_ascii_to_binary(FILE& src_file, FILE& dst_fil
                     parse_res = EResult::InvalidAsciiGCodeFile;
                     return;
                 }
+                if (data_size > binarize::get_max_block_data_size()) {
+                    // Declared in a comment line, parsed as size_t, so not even
+                    // bounded by the 4 GiB ceiling the binary header fields have.
+                    parse_res = EResult::BlockTooLarge;
+                    return;
+                }
                 curr_thumbnail_data_size = data_size;
                 curr_thumbnail_data_loaded = 0;
                 thumbnail.data.resize(data_size);

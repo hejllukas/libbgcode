@@ -156,7 +156,8 @@ PYBIND11_MODULE(MODULE_NAME, m) {
         .value("AlreadyBinarized", core::EResult::AlreadyBinarized)
         .value("MissingPrinterMetadata", core::EResult::MissingPrinterMetadata)
         .value("MissingPrintMetadata", core::EResult::MissingPrintMetadata)
-        .value("MissingSlicerMetadat", core::EResult::MissingSlicerMetadata)
+        .value("MissingSlicerMetadata", core::EResult::MissingSlicerMetadata)
+        .value("BlockTooLarge", core::EResult::BlockTooLarge)
         ;
 
     py::enum_<core::ECompressionType>(m, "CompressionType")
