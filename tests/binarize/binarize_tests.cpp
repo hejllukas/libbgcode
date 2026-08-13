@@ -14,7 +14,7 @@ static std::string roundtrip(const std::vector<std::string> &lines, uint8_t flag
     std::vector<uint8_t> binary;
     mp_binarizer.initialize(binary);
     for (const std::string &line: lines) {
-        mp_binarizer.binarize_line(line, binary);
+        REQUIRE(mp_binarizer.binarize_line(line, binary));
     }
 
     mp_binarizer.finalize(binary);

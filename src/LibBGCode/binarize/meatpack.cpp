@@ -86,7 +86,7 @@ void MPBinarizer::finalize(std::vector<uint8_t>& dst)
     }
 }
 
-void MPBinarizer::binarize_line(const std::string& line, std::vector<uint8_t>& dst)
+bool MPBinarizer::binarize_line(const std::string& line, std::vector<uint8_t>& dst)
 {
     auto unified_method = [this](const std::string& line) {
         const std::string::size_type g_idx = line.find('G');
@@ -142,13 +142,17 @@ void MPBinarizer::binarize_line(const std::string& line, std::vector<uint8_t>& d
 
         if ((m_flags & Flag_RemoveComments) == 0) {
             if (!trimmed_line.empty() && trimmed_line[0] == ';') {
+                // Kept verbatim; a 0xFF here would collide with the decoder's signal byte.
+                if (line.find('\xff') != std::string::npos)
+                    return false;
+
                 if (m_binarizing) {
                     append_command(Command_DisablePacking, dst);
                     m_binarizing = false;
                 }
 
                 dst.insert(dst.end(), line.begin(), line.end());
-                return;
+                return true;
             }
         }
 
@@ -157,14 +161,17 @@ void MPBinarizer::binarize_line(const std::string& line, std::vector<uint8_t>& d
             trimmed_line[0] == '\n' ||
             trimmed_line[0] == '\r' ||
             line.size() < 2)
-            return;
+            return true;
 
         std::string modifiedLine = std::string(trim(std::string_view(line.substr(0, line.find(';')))));
         if (modifiedLine.empty())
-            return;
+            return true;
         modifiedLine = unified_method(modifiedLine);
         if (modifiedLine.back() != '\n')
             modifiedLine.push_back('\n');
+        // 0xFF is the decoder's signal byte; it cannot be represented in the packed output.
+        if (modifiedLine.find('\xff') != std::string::npos)
+            return false;
         const size_t line_len = modifiedLine.size();
         std::vector<uint8_t> temp_buffer;
         temp_buffer.reserve(line_len);
@@ -204,6 +211,8 @@ void MPBinarizer::binarize_line(const std::string& line, std::vector<uint8_t>& d
 
         dst.insert(dst.end(), temp_buffer.begin(), temp_buffer.end());
     }
+
+    return true;
 }
 
 void MPBinarizer::append_command(unsigned char cmd, std::vector<uint8_t>& dst) {

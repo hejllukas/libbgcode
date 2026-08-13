@@ -167,7 +167,8 @@ static bool encode_gcode(const std::string& src, std::vector<uint8_t>& dst, EGCo
             if (end_it != src.end())
                 ++end_it;
             const std::string line(begin_it, end_it);
-            binarizer.binarize_line(line, dst);
+            if (!binarizer.binarize_line(line, dst))
+                return false;
             begin_it = end_it;
         }
         binarizer.finalize(dst);
