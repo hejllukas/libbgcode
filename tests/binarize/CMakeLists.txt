@@ -1,6 +1,7 @@
 add_executable(binarize_tests
     binarize_tests.cpp
     meatpack_overflow_tests.cpp
+    metadata_iterator_tests.cpp
 )
 
 target_link_libraries(binarize_tests ${_libname}_binarize test_common)

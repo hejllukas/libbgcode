@@ -9,6 +9,7 @@ extern "C" {
 }
 #include <zlib.h>
 
+#include <algorithm>
 #include <cstring>
 #include <cassert>
 
@@ -88,18 +89,19 @@ static bool decode_metadata(const std::vector<uint8_t>& src, std::vector<std::pa
     {
     case EMetadataEncodingType::INI:
     {
+        // The advance must not depend on finding '=': a line without it would
+        // otherwise never move the iterator and the loop could not terminate.
+        // Nor may the iterator be incremented past end(), which would leave the
+        // next dereference scanning beyond the buffer.
         auto begin_it = src.begin();
-        auto end_it = src.begin();
-        while (end_it != src.end()) {
-            while (end_it != src.end() && *end_it != '\n') {
-                ++end_it;
-            }
+        while (begin_it != src.end()) {
+            const auto end_it = std::find(begin_it, src.end(), '\n');
             const std::string item(begin_it, end_it);
             const size_t pos = item.find_first_of('=');
             if (pos != std::string::npos) {
                 dst.emplace_back(item.substr(0, pos), item.substr(pos + 1));
-                begin_it = ++end_it;
             }
+            begin_it = (end_it == src.end()) ? end_it : end_it + 1;
         }
         break;
     }
@@ -137,7 +139,13 @@ static bool encode_gcode(const std::string& src, std::vector<uint8_t>& dst, EGCo
             while (end_it != src.end() && *end_it != '\n') {
                 ++end_it;
             }
-            const std::string line(begin_it, ++end_it);
+            // The newline belongs to the line, but a final line need not have one:
+            // incrementing unconditionally would step past end(), and the outer
+            // condition would then still hold, leaving the next scan reading beyond
+            // the buffer.
+            if (end_it != src.end())
+                ++end_it;
+            const std::string line(begin_it, end_it);
             binarizer.binarize_line(line, dst);
             begin_it = end_it;
         }
