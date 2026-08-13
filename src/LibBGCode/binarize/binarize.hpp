@@ -6,6 +6,16 @@
 
 namespace bgcode { namespace binarize {
 
+// Upper bound on the size of a single block's data, both as declared in a block
+// header and as actually produced by decompression. A block header is
+// attacker-supplied and its size fields are unrelated to the bytes really present
+// in the file, so without a bound a tiny file can make a reader commit arbitrary
+// memory. The default is generous -- orders of magnitude above any block a slicer
+// emits today -- and is a resource bound, not a statement about what content is
+// legitimate; raise it if you write unusually large blocks.
+BGCODE_BINARIZE_EXPORT size_t get_max_block_data_size();
+BGCODE_BINARIZE_EXPORT void set_max_block_data_size(size_t size);
+
 struct BGCODE_BINARIZE_EXPORT BaseMetadataBlock
 {
     // type of data encoding

@@ -50,6 +50,27 @@ static std::vector<uint8_t> encode(const std::byte* data, size_t data_size)
     return ret;
 }
 
+// 16 MiB. Two things set this. It is ~150x the largest block a slicer emits in
+// practice (the biggest observed in a sample of real files was a ~108 KB
+// thumbnail), so it cannot reject plausible content. And peak memory is roughly
+// three times the limit rather than equal to it -- measured 200 MB peak RSS for a
+// single block at a 64 MiB limit -- because the compressed buffer, the
+// decompressed buffer and the decoded result are live at the same time. The
+// limit therefore has to be chosen against 3x, not 1x.
+static size_t g_max_block_data_size = 16 * 1024 * 1024;
+
+size_t get_max_block_data_size() { return g_max_block_data_size; }
+void set_max_block_data_size(size_t size) { g_max_block_data_size = size; }
+
+// Both header size fields must be checked before either is used to allocate:
+// compressed_size drives a resize() before any payload is read, and
+// uncompressed_size drives an eager resize() inside the heatshrink decoder.
+static bool block_sizes_within_limit(const BlockHeader& block_header)
+{
+    const size_t limit = g_max_block_data_size;
+    return block_header.uncompressed_size <= limit && block_header.compressed_size <= limit;
+}
+
 static uint16_t metadata_encoding_types_count() { return 1 + (uint16_t)EMetadataEncodingType::JSON; }
 static uint16_t thumbnail_formats_count()       { return 1 + (uint16_t)EThumbnailFormat::QOI; }
 static uint16_t gcode_encoding_types_count()    { return 1 + (uint16_t)EGCodeEncodingType::MeatPackComments; }
@@ -319,6 +340,12 @@ static bool compress(std::vector<uint8_t>& src, std::vector<uint8_t>& dst, EComp
 
 static bool uncompress(const std::vector<uint8_t>& src, std::vector<uint8_t>& dst, ECompressionType compression_type, size_t uncompressed_size)
 {
+    // Defensive: the callers above check the header, but the heatshrink branch
+    // below resizes to uncompressed_size in one go before decoding anything, so
+    // this must not be reachable with an unbounded value from any caller.
+    if (uncompressed_size > g_max_block_data_size)
+        return false;
+
     switch (compression_type)
     {
     case ECompressionType::Deflate:
@@ -339,21 +366,53 @@ static bool uncompress(const std::vector<uint8_t>& src, std::vector<uint8_t>& ds
             return false;
 
         while (strm.avail_in > 0) {
+            // total_in/total_out, not avail_in/avail_out: the flush block below
+            // always resets avail_out to BUFSIZE whenever it runs, so avail_out alone
+            // cannot show whether the preceding inflate() call made progress. total_*
+            // is cumulative and monotonic and nothing here touches it.
+            const uLong total_in_before = strm.total_in;
+            const uLong total_out_before = strm.total_out;
+
             res = inflate(&strm, Z_NO_FLUSH);
             if (res != Z_OK && res != Z_STREAM_END) {
                 inflateEnd(&strm);
                 return false;
             }
             if (strm.avail_out == 0) {
+                // The declared uncompressed_size is only a reserve() hint above; a
+                // header may understate it while the stream expands without bound,
+                // so the real output has to be bounded here.
+                if (dst.size() + BUFSIZE > g_max_block_data_size) {
+                    inflateEnd(&strm);
+                    return false;
+                }
                 dst.insert(dst.end(), temp_buffer.data(), temp_buffer.data() + BUFSIZE);
                 strm.next_out = temp_buffer.data();
                 strm.avail_out = BUFSIZE;
+            }
+
+            // Trailing bytes after a complete stream leave avail_in > 0 with nothing
+            // left to decode. Breaking here relies on the Z_FINISH loop below being a
+            // harmless no-op on an already-finished stream: zlib returns Z_STREAM_END
+            // again rather than erroring, which its source does but its documentation
+            // does not promise.
+            if (res == Z_STREAM_END)
+                break;
+            // Without this guard a stream that neither consumes input nor produces
+            // output would spin here forever.
+            if (strm.total_in == total_in_before && strm.total_out == total_out_before) {
+                inflateEnd(&strm);
+                return false;
             }
         }
 
         int inflate_res = Z_OK;
         while (inflate_res == Z_OK) {
             if (strm.avail_out == 0) {
+                if (dst.size() + BUFSIZE > g_max_block_data_size) {
+                    inflateEnd(&strm);
+                    return false;
+                }
                 dst.insert(dst.end(), temp_buffer.data(), temp_buffer.data() + BUFSIZE);
                 strm.next_out = temp_buffer.data();
                 strm.avail_out = BUFSIZE;
@@ -366,13 +425,40 @@ static bool uncompress(const std::vector<uint8_t>& src, std::vector<uint8_t>& ds
             return false;
         }
 
+        // The final flush shares the same unbounded-header risk as the flush block
+        // above it, so it needs the same cap check rather than being the one insert
+        // in this function that trusts uncompressed_size.
+        if (dst.size() + (BUFSIZE - strm.avail_out) > g_max_block_data_size) {
+            inflateEnd(&strm);
+            return false;
+        }
         dst.insert(dst.end(), temp_buffer.data(), temp_buffer.data() + BUFSIZE - strm.avail_out);
+
+        // uncompressed_size is only a reserve() hint to zlib, not something it
+        // enforces, so a header can under- or over-state it and inflate() will
+        // happily produce a different amount of output. Require an exact match
+        // rather than trusting the declared size.
+        if (dst.size() != uncompressed_size) {
+            inflateEnd(&strm);
+            return false;
+        }
+
         inflateEnd(&strm);
         break;
     }
     case ECompressionType::Heatshrink_11_4:
     case ECompressionType::Heatshrink_12_4:
     {
+        // A payload that decodes to nothing is compressed from nothing, so the two
+        // declared sizes must both be zero; anything else is a header that contradicts
+        // itself and is rejected rather than silently dropping the payload.
+        if (uncompressed_size == 0) {
+            if (!src.empty())
+                return false;
+            dst.clear();
+            break;
+        }
+
         const uint8_t window_sz = (compression_type == ECompressionType::Heatshrink_11_4) ? 11 : 12;
         const uint8_t lookahead_sz = 4;
         const uint16_t input_buffer_size = 2048;
@@ -390,13 +476,15 @@ static bool uncompress(const std::vector<uint8_t>& src, std::vector<uint8_t>& ds
 
         const size_t compressed_size = src.size();
         while (sunk < compressed_size) {
+            const uint32_t sunk_before = sunk;
+            const uint32_t polled_before = polled;
+
             size_t count = 0;
             const HSD_sink_res sink_res = heatshrink_decoder_sink(decoder, &buf[sunk], compressed_size - sunk, &count);
             if (sink_res < 0) {
                 heatshrink_decoder_free(decoder);
                 return false;
             }
-
             sunk += (uint32_t)count;
 
             HSD_poll_res poll_res;
@@ -408,10 +496,34 @@ static bool uncompress(const std::vector<uint8_t>& src, std::vector<uint8_t>& ds
                 }
                 polled += (uint32_t)count;
             } while (polled < uncompressed_size && poll_res == HSDR_POLL_MORE);
+
+            // Neither call advanced: dst is full while the decoder's input buffer is
+            // also full, so the declared uncompressed_size cannot hold the stream and
+            // the file is malformed. Rejecting rather than breaking matters here --
+            // breaking would leave dst sized to uncompressed_size but only partly
+            // filled and still report success.
+            if (sunk == sunk_before && polled == polled_before) {
+                heatshrink_decoder_free(decoder);
+                return false;
+            }
+        }
+
+        // Unlike Deflate, heatshrink's output buffer is sized to uncompressed_size
+        // up front, so a stream that ends early leaves the tail zero-padded rather
+        // than failing: the loop above simply runs out of input with polled short
+        // of the declared size. That has to be caught here rather than relying on
+        // the finish check below, which is about pending output, not missing output.
+        if (polled != uncompressed_size) {
+            heatshrink_decoder_free(decoder);
+            return false;
         }
 
         const HSD_finish_res finish_res = heatshrink_decoder_finish(decoder);
-        if (finish_res < 0) {
+        // HSDR_FINISH_DONE is 0 and HSDR_FINISH_MORE is 1, so `finish_res < 0` lets
+        // "there is still output pending" through as success. Pending output here
+        // means polled already reached uncompressed_size while the decoder still
+        // has more to give, so the real stream is longer than declared.
+        if (finish_res != HSDR_FINISH_DONE) {
             heatshrink_decoder_free(decoder);
             return false;
         }
@@ -483,6 +595,9 @@ core::EResult write(const BaseMetadataBlock &block, FILE& file, core::EBlockType
 EResult BaseMetadataBlock::read_data(FILE& file, const BlockHeader& block_header)
 {
     const ECompressionType compression_type = (ECompressionType)block_header.compression;
+
+    if (!block_sizes_within_limit(block_header))
+        return EResult::BlockTooLarge;
 
     if (!read_from_file(file, (void*)&encoding_type, sizeof(encoding_type)))
         return EResult::ReadError;
@@ -677,6 +792,8 @@ EResult ThumbnailBlock::read_data(FILE& file, const FileHeader& file_header, con
         return EResult::InvalidThumbnailHeight;
     if (block_header.uncompressed_size == 0)
         return EResult::InvalidThumbnailDataSize;
+    if (!block_sizes_within_limit(block_header))
+        return EResult::BlockTooLarge;
 
     data.resize(block_header.uncompressed_size);
     if (!read_from_file(file, (void*)data.data(), block_header.uncompressed_size))
@@ -753,6 +870,9 @@ EResult GCodeBlock::write(FILE& file, ECompressionType compression_type, EChecks
 EResult GCodeBlock::read_data(FILE& file, const FileHeader& file_header, const BlockHeader& block_header)
 {
     const ECompressionType compression_type = (ECompressionType)block_header.compression;
+
+    if (!block_sizes_within_limit(block_header))
+        return EResult::BlockTooLarge;
 
     if (!read_from_file(file, (void*)&encoding_type, sizeof(encoding_type)))
         return EResult::ReadError;

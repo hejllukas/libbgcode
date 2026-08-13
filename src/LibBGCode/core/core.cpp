@@ -253,6 +253,7 @@ BGCODE_CORE_EXPORT std::string_view translate_result(EResult result)
     case EResult::MissingPrinterMetadata:      { return "Missing printer metadata"sv; }
     case EResult::MissingPrintMetadata:        { return "Missing print metadata"sv; }
     case EResult::MissingSlicerMetadata:       { return "Missing slicer metadata"sv; }
+    case EResult::BlockTooLarge:               { return "Block data size exceeds the configured maximum"sv; }
     }
     return std::string_view();
 }
