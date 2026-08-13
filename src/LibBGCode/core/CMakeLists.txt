@@ -10,7 +10,7 @@ add_library(${_libname}_core
 )
 
 if (${PROJECT_NAME}_BUILD_SANITIZERS)
-    if (CMAKE_COMPILER_IS_GNUCC)
+    if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
         target_compile_options(${_libname}_core PUBLIC
             -g
             -Wstrict-aliasing
