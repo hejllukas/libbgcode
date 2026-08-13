@@ -351,6 +351,10 @@ static bool uncompress(const std::vector<uint8_t>& src, std::vector<uint8_t>& ds
     case ECompressionType::Deflate:
     {
         dst.clear();
+        // inflate cannot make progress from zero input; an empty stream
+        // declaring zero output decompresses to nothing.
+        if (src.empty() && uncompressed_size == 0)
+            break;
         dst.reserve(uncompressed_size);
 
         const size_t BUFSIZE = 2048;
