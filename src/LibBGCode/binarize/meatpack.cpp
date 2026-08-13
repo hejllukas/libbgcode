@@ -3,6 +3,7 @@
 #include <unordered_map>
 #include <algorithm>
 #include <cassert>
+#include <cstdlib>
 
 namespace MeatPack {
 
@@ -244,7 +245,9 @@ void unbinarize(const std::vector<uint8_t>& src, std::string& dst)
     uint8_t char_buf = 0;                // Buffers a character if dealing with out-of-sequence pairs
     size_t cmd_count = 0;                // Counts how many command bytes are received (need 2)
     size_t full_char_queue = 0;          // Counts how many full-width characters are to be received
-    std::array<uint8_t, 2> char_out_buf; // Output buffer for caching up to 2 characters
+    // One loop iteration can call handle_rx_char twice, each emitting up to 2 characters.
+    constexpr size_t max_chars_per_iteration = 4;
+    std::array<uint8_t, max_chars_per_iteration> char_out_buf;
     size_t char_out_count = 0;           // Stores number of characters to be read out
 
     auto handle_command = [&](uint8_t c) {
@@ -261,6 +264,8 @@ void unbinarize(const std::vector<uint8_t>& src, std::string& dst)
     };
 
     auto handle_output_char = [&](uint8_t c) {
+        if (char_out_count >= char_out_buf.size())
+            std::abort(); // char_out_buf is sized for the worst case; getting here means that invariant broke
         char_out_buf[char_out_count++] = c;
     };
 
@@ -340,7 +345,7 @@ void unbinarize(const std::vector<uint8_t>& src, std::string& dst)
             handle_output_char(c);
     };
 
-    auto get_result_char = [&](std::array<char, 2>& chars_out) {
+    auto get_result_char = [&](std::array<char, max_chars_per_iteration>& chars_out) {
         if (char_out_count > 0) {
             const size_t res = char_out_count;
             for (uint8_t i = 0; i < char_out_count; ++i) {
@@ -400,7 +405,7 @@ void unbinarize(const std::vector<uint8_t>& src, std::string& dst)
             return std::find(parameters.begin(), parameters.end(), c) != parameters.end();
         };
 
-        std::array<char, 2> c_unbin{ 0, 0 };
+        std::array<char, max_chars_per_iteration> c_unbin{ 0, 0, 0, 0 };
         const size_t char_count = get_result_char(c_unbin);
         for (size_t i = 0; i < char_count; ++i) {
             // GCodeReader::parse_line_internal() is unable to parse a G line where the data are not separated by spaces
