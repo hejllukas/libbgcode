@@ -3,6 +3,7 @@ add_executable(binarize_tests
     decompress_hardening_tests.cpp
     empty_block_tests.cpp
     heatshrink_roundtrip_tests.cpp
+    meatpack_encode_tests.cpp
     meatpack_overflow_tests.cpp
     metadata_iterator_tests.cpp
 )

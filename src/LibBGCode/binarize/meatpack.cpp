@@ -222,6 +222,11 @@ void MPBinarizer::initialize_lookup_tables() {
         s_lookup_tables.value[index] = value;
     }
 
+    // The '\0' entry only supplies the escape nibble (value 0b1111) used above; a
+    // real 0x00 data byte must stay non-packable so it takes the verbatim-escape
+    // path instead of being packed as that escape nibble.
+    s_lookup_tables.packable[static_cast<uint8_t>('\0')] = 0;
+
     if ((m_flags & Flag_OmitWhitespaces) != 0) {
         s_lookup_tables.value[static_cast<uint8_t>(SpaceReplacedCharacter)] = ReverseLookupTbl.at(' ');
         s_lookup_tables.packable[static_cast<uint8_t>(SpaceReplacedCharacter)] = 1;
