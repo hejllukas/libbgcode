@@ -3,6 +3,7 @@
 #include <unordered_map>
 #include <algorithm>
 #include <cassert>
+#include <charconv>
 #include <cstdlib>
 
 namespace MeatPack {
@@ -88,12 +89,19 @@ static std::string compact_gcode_line_for_packing(const std::string& line, bool 
     return result;
 }
 
+// Only G0 to G3 lines are compacted because the decoder reliably reinserts spaces only before their parameters.
 static std::string compact_gcode_line_if_it_contains_g_command(const std::string& line, bool uppercase_e)
 {
     const std::string::size_type g_idx = line.find('G');
     if (g_idx != std::string::npos) {
         if (g_idx + 1 < line.size() && line[g_idx + 1] >= '0' && line[g_idx + 1] <= '9') {
-            return compact_gcode_line_for_packing(line, uppercase_e);
+            int gcode_number = 0;
+            const std::from_chars_result gcode_number_result =
+                std::from_chars(line.data() + g_idx + 1, line.data() + line.size(), gcode_number);
+            const bool is_g0_to_g3_line = g_idx == 0 && gcode_number_result.ec == std::errc() && gcode_number <= 3;
+            if (is_g0_to_g3_line) {
+                return compact_gcode_line_for_packing(line, uppercase_e);
+            }
         }
     }
 
