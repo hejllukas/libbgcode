@@ -64,6 +64,42 @@ static std::string_view ltrim(const std::string_view& str)
     return start == std::string_view::npos ? std::string_view() : str.substr(start);
 }
 
+static std::string compact_gcode_line_for_packing(const std::string& line, bool uppercase_e)
+{
+    std::string result = line;
+    if (uppercase_e) {
+        std::replace(result.begin(), result.end(), 'e', 'E');
+    }
+
+    std::replace(result.begin(), result.end(), 'x', 'X');
+    std::replace(result.begin(), result.end(), 'g', 'G');
+    result.erase(std::remove(result.begin(), result.end(), ' '), result.end());
+    if (result.find('*') != std::string::npos) {
+        size_t checksum = 0;
+        result.erase(std::remove(result.begin(), result.end(), '*'), result.end());
+        for (const char line_char : result) {
+            checksum ^= static_cast<uint8_t>(line_char);
+        }
+
+        result += "*" + std::to_string(checksum);
+    }
+
+    result += '\n';
+    return result;
+}
+
+static std::string compact_gcode_line_if_it_contains_g_command(const std::string& line, bool uppercase_e)
+{
+    const std::string::size_type g_idx = line.find('G');
+    if (g_idx != std::string::npos) {
+        if (g_idx + 1 < line.size() && line[g_idx + 1] >= '0' && line[g_idx + 1] <= '9') {
+            return compact_gcode_line_for_packing(line, uppercase_e);
+        }
+    }
+
+    return line;
+}
+
 MPBinarizer::LookupTables MPBinarizer::s_lookup_tables = { { 0 }, { 0 }, false, 0 };
 
 MPBinarizer::MPBinarizer(uint8_t flags) : m_flags(flags) {}
@@ -88,47 +124,6 @@ void MPBinarizer::finalize(std::vector<uint8_t>& dst)
 
 bool MPBinarizer::binarize_line(const std::string& line, std::vector<uint8_t>& dst)
 {
-    auto unified_method = [this](const std::string& line) {
-        const std::string::size_type g_idx = line.find('G');
-        if (g_idx != std::string::npos) {
-            if (g_idx + 1 < line.size() && line[g_idx + 1] >= '0' && line[g_idx + 1] <= '9') {
-                if ((m_flags & Flag_OmitWhitespaces) != 0) {
-                    std::string result = line;
-                    std::replace(result.begin(), result.end(), 'e', 'E');
-                    std::replace(result.begin(), result.end(), 'x', 'X');
-                    std::replace(result.begin(), result.end(), 'g', 'G');
-                    result.erase(std::remove(result.begin(), result.end(), ' '), result.end());
-                    if (result.find('*') != std::string::npos) {
-                        size_t checksum = 0;
-                        result.erase(std::remove(result.begin(), result.end(), '*'), result.end());
-                        for (size_t i = 0; i < result.size(); ++i) {
-                            checksum ^= static_cast<uint8_t>(result[i]);
-                        }
-                        result += "*" + std::to_string(checksum);
-                    }
-                    result += '\n';
-                    return result;
-                }
-                else {
-                    std::string result = line;
-                    std::replace(result.begin(), result.end(), 'x', 'X');
-                    std::replace(result.begin(), result.end(), 'g', 'G');
-                    result.erase(std::remove(result.begin(), result.end(), ' '), result.end());
-                    if (result.find('*') != std::string::npos) {
-                        size_t checksum = 0;
-                        result.erase(std::remove(result.begin(), result.end(), '*'), result.end());
-                        for (size_t i = 0; i < result.size(); ++i) {
-                            checksum ^= static_cast<uint8_t>(result[i]);
-                        }
-                        result += "*" + std::to_string(checksum);
-                    }
-                    result += '\n';
-                    return result;
-                }
-            }
-        }
-        return line;
-    };
     auto is_packable = [](char c) {
         return (s_lookup_tables.packable[static_cast<uint8_t>(c)] != 0);
     };
@@ -164,11 +159,15 @@ bool MPBinarizer::binarize_line(const std::string& line, std::vector<uint8_t>& d
             return true;
 
         std::string modifiedLine = std::string(trim(std::string_view(line.substr(0, line.find(';')))));
-        if (modifiedLine.empty())
+        if (modifiedLine.empty()) {
             return true;
-        modifiedLine = unified_method(modifiedLine);
-        if (modifiedLine.back() != '\n')
+        }
+
+        modifiedLine = compact_gcode_line_if_it_contains_g_command(modifiedLine, (m_flags & Flag_OmitWhitespaces) != 0);
+        if (modifiedLine.back() != '\n') {
             modifiedLine.push_back('\n');
+        }
+
         // 0xFF is the decoder's signal byte; it cannot be represented in the packed output.
         if (modifiedLine.find('\xff') != std::string::npos)
             return false;
