@@ -439,8 +439,9 @@ void unbinarize(const std::vector<uint8_t>& src, std::string& dst)
                 ++it_unbin_end;
                 if (it_unbin_end == unbin_buffer.end()) {
                     // the buffer is not big enough, resize it
-                    unbin_buffer.resize(2 * unbin_buffer.size(), 0);
-                    it_unbin_end = unbin_buffer.begin() + curr_unbin_buffer_length + 1;
+                    const size_t unbin_buffer_length = unbin_buffer.size();
+                    unbin_buffer.resize(2 * unbin_buffer_length, 0);
+                    it_unbin_end = unbin_buffer.begin() + unbin_buffer_length;
                 }
             }
 
@@ -449,8 +450,9 @@ void unbinarize(const std::vector<uint8_t>& src, std::string& dst)
                 ++it_unbin_end;
                 if (it_unbin_end == unbin_buffer.end()) {
                     // the buffer is not big enough, resize it
-                    unbin_buffer.resize(2 * unbin_buffer.size(), 0);
-                    it_unbin_end = unbin_buffer.begin() + curr_unbin_buffer_length + 1;
+                    const size_t unbin_buffer_length = unbin_buffer.size();
+                    unbin_buffer.resize(2 * unbin_buffer_length, 0);
+                    it_unbin_end = unbin_buffer.begin() + unbin_buffer_length;
                 }
             }
         }
