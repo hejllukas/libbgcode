@@ -436,12 +436,12 @@ void unbinarize(const std::vector<uint8_t>& src, std::string& dst)
             if (c_unbin[i] == 'G' && (curr_unbin_buffer_length == 0 || *std::prev(it_unbin_end, 1) == '\n')) {
                 add_space = true;
                 new_line = true;
-            }
-            else if (c_unbin[i] == '\n')
+            } else if (c_unbin[i] == '\n' || c_unbin[i] == ' ') {
+                // A line containing a space was stored unchanged by the encoder.
                 add_space = false;
+            }
 
-            if (!new_line && add_space && (curr_unbin_buffer_length == 0 || *std::prev(it_unbin_end, 1) != ' ') &&
-                is_gline_parameter(c_unbin[i])) {
+            if (!new_line && add_space && is_gline_parameter(c_unbin[i])) {
                 *it_unbin_end = ' ';
                 ++it_unbin_end;
                 if (it_unbin_end == unbin_buffer.end()) {
