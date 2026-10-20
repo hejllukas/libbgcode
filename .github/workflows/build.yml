@@ -119,6 +119,13 @@ jobs:
         name: libbgcode-python-linux
         path: ${{github.workspace}}/dist/
 
+    - uses: actions/upload-artifact@v4  # upload command line tool
+      name: Saving bgcode executable
+      if: success() && matrix.sanitizer == 'OFF'
+      with:
+        name: bgcode-linux-x64
+        path: ${{github.workspace}}/build/dist/bin/
+
   build-wasm:
     runs-on: ubuntu-latest
     container:
@@ -306,6 +313,13 @@ jobs:
         name: libbgcode-python-msvc
         path: ${{github.workspace}}\dist\
 
+    - uses: actions/upload-artifact@v4  # upload command line tool
+      name: Saving bgcode executable
+      if: success()
+      with:
+        name: bgcode-windows-${{ matrix.arch }}
+        path: ${{github.workspace}}\build\dist\bin\
+
   build-mac:
     # The CMake configure and build commands are platform agnostic and should work equally
     # well on Windows or Mac.  You can convert this to a matrix build if you need
@@ -408,3 +422,10 @@ jobs:
       with:
         name: libbgcode-python-mac
         path: ${{github.workspace}}/dist/
+
+    - uses: actions/upload-artifact@v4  # upload command line tool
+      name: Saving bgcode executable
+      if: success()
+      with:
+        name: bgcode-macos-arm64
+        path: ${{github.workspace}}/build/dist/bin/
