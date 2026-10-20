@@ -30,7 +30,10 @@ jobs:
 
     - name: Hashing dependency CMake files
       id: dep_cmake_hash
-      run: echo "dep_cmake_hash=${{ hashFiles('./deps/**') }}" >> $GITHUB_OUTPUT
+      # ImageOS keeps dependencies built on different Ubuntu versions (and so glibc versions) apart.
+      run: |
+        echo "dep_cmake_hash=${{ hashFiles('./deps/**') }}" >> $GITHUB_OUTPUT
+        echo "image_os=$ImageOS" >> $GITHUB_OUTPUT
 
     - name: Create Build Environment
       # Some projects don't allow in-source building, so create a separate build directory
@@ -48,7 +51,7 @@ jobs:
       id: cache
       with:
         path: ${{github.workspace}}/deps/build-python-module/destdir
-        key: ${{ runner.os }}-${{ matrix.arch }}-build-deps-${{ steps.dep_cmake_hash.outputs.dep_cmake_hash }}
+        key: ${{ runner.os }}-${{ steps.dep_cmake_hash.outputs.image_os }}-${{ matrix.arch }}-build-deps-${{ steps.dep_cmake_hash.outputs.dep_cmake_hash }}
 
     - name: Build dependencies
       if: ${{ steps.cache.outputs.cache-hit != 'true' }}
